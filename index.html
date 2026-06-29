@@ -33,13 +33,13 @@ const OACI_MAP = {
   Y:'Yankee',Z:'Zulu',
 }
 const toOACI = (reg) => reg.replace(/-/g, '').toUpperCase().split('').map(c => OACI_MAP[c] || c).join(' ')
-const makeAircraft = (reg) => ({ callsign: reg, display: reg, type: 'Cessna 172' })
+const makeAircraft = (reg, type) => ({ callsign: reg, display: reg, type: type || 'Cessna 172' })
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
 
 const SCENARIOS = [
-  { id:'depart_lfma',   name:'Départ VFR',           emoji:'🛫', airport:'LFMA Aix-les-Milles',  description:'AFIS → Mise en route → Décollage piste 32 → Départ',        difficulty:'Débutant',      color:'#22c55e' },
-  { id:'arrivee_lfma',  name:'Arrivée VFR',           emoji:'🛬', airport:'LFMA Aix-les-Milles',  description:'Appel 127.725 → Intégration droite 32 → Atterrissage',    difficulty:'Débutant',      color:'#22c55e' },
+  { id:'depart_lfma',   name:'Départ VFR',           emoji:'🛫', airport:'LFMA Aix-les-Milles',  description:'Sol 121.605 → Tour 118.750 → Décollage 32 → Départ CTR',        difficulty:'Débutant',      color:'#22c55e' },
+  { id:'arrivee_lfma',  name:'Arrivée VFR',           emoji:'🛬', airport:'LFMA Aix-les-Milles',  description:'Contact 3 min avant CTR → Tour 118.750 → Intégration E → RWY 32',    difficulty:'Débutant',      color:'#22c55e' },
   { id:'navigation',    name:'Navigation VFR',        emoji:'✈️', airport:'LFMA → LFNV (Vinon)',  description:'Départ + comptes-rendus position + arrivée',      difficulty:'Intermédiaire', color:'#f59e0b' },
   { id:'ctr_marseille', name:'Transit CTR Marseille', emoji:'🗼', airport:'Traversée LFML CTR',   description:'Demande clairance CTR → Transit → Sortie',        difficulty:'Avancé',        color:'#f97316' },
   { id:'urgence',       name:'Situation dégradée',    emoji:'🚨', airport:'En route',             description:'Panne simulée → PAN PAN / MAYDAY → Guidage',     difficulty:'Expert',        color:'#ef4444' },
@@ -54,22 +54,27 @@ const buildPrompt = (scenario, aircraft) => `Tu es un organisme AFIS/ATC frança
 SCÉNARIO : ${scenario.name} — ${scenario.airport}
 AÉRONEF : ${aircraft.callsign} (${toOACI(aircraft.callsign)}), ${aircraft.type}
 
-DONNÉES VAC LFMA AIX-LES-MILLES :
-- Pistes : 14 (QFU 140) / 32 (QFU 320) — piste principale 32
-- Longueur : 1200m x 30m — seuil décalé piste 32 : 232m
-- Altitude terrain : 343 ft
-- Service : AFIS — organisme "AIX INFORMATION" (pas de tour de contrôle)
-- Fréquence AFIS : 127.725 MHz
-- ATIS : 136.225 MHz (lettre phonétique A, B, C...)
-- NDB ALM : 413 kHz (intégration piste 14)
-- TDP : 1500 ft QNH, circuit à droite en piste 32
-- Parking aviation générale : nord de la piste (DGAC)
-- Aire Sierra-Ouest : accord AFIS requis
-- Transpondeur obligatoire horaires AFIS
-- Horaires été : 0600 UTC — coucher soleil + 30 min
+DONNÉES VAC LFMA AIX-LES-MILLES — AIP FRANCE AMDT 02/26 (aérodrome CONTRÔLÉ) :
+- Pistes : 32 (QFU 324°) / 14 (QFU 144°) — préférentielle 32 (face au mistral)
+- Longueur : 1604m x 30m — TORA 32 : 1124m / TORA 14 : 1249m
+- Altitude terrain : 368 ft
+- ATIS : 136.230 MHz
+- Sol "Aix Sol" (GND) : 121.605 MHz — mise en route, roulage
+- Tour "Aix Tour" (TWR) : 118.750 MHz — décollage, atterrissage, intégration
+- Absence ATS hors horaires : Auto-information 118.750 MHz
+- Approche : Provence Approche 124.350 MHz (au-dessus 2500 ft, sur instruction ATC)
+- Horaires été : Lun-Sam 0600-1730 / Dim 0600-1700 UTC
+- Circuit : EST des installations, 1500 ft AMSL (1100 AGL) — 1er contact 3 min avant CTR
+- DEP RWY 32 : axe puis virage à droite (sauf clairance contraire)
+- DEP RWY 14 : axe puis virage à gauche au-delà prison de Luynes
+- ARR : verticale centre commercial (EST), éviter prison Luynes par le SUD
+- Transpondeur obligatoire pendant HOR ATS
+- Points de report : AN (Travers Eguilles W), AT (Carrefour Eguilles E), AE (Cheminée Gardanne N), AR (Bretelle A8 Aix W — panne radio), AS (Ouest Cabriès — CLR ATC), AW (Aqueduc Roquefavour — CLR ATC)
+- Parkings : Aire NOVEMBRE-ECHO (N1-N6), Aire SIERRA-ECHO (S1-S12), SIERRA herbe
+- NDB ALM 413 kHz, VDF sur terrain
 
 RÔLE :
-Tu joues "Aix Information" et tous les organismes nécessaires selon le scénario.
+Tu joues "Aix Sol" (121.600), "Aix Tour" (118.750) et tous les organismes nécessaires selon le scénario.
 Utilise les vraies fréquences, la vraie piste, les vrais points de report PACA.
 
 RÈGLE ABSOLUE SUR LE FORMAT :
@@ -91,7 +96,7 @@ Fin de vacation : "[indicatif], au revoir"
 FORMAT JSON STRICT — aucun texte avant/après, aucun markdown :
 {
   "atc_message": "texte radio pur, lisible à voix haute, aucun emoji ni explication",
-  "atc_unit": "INFORMATION|APPROCHE|INFO|SYSTÈME",
+  "atc_unit": "SOL|TOUR|APPROCHE|INFO|SYSTÈME",
   "feedback": null,
   "current_phase": "Phase en cours",
   "scenario_complete": false
@@ -200,8 +205,9 @@ function ApiKeyScreen({ onSave }) {
 
 function HomeScreen({ onStart, onResetKey }) {
   const [showOACI, setShowOACI] = useState(false)
-  const [regInput, setRegInput] = useState('')
+  const [regInput, setRegInput]   = useState('')
   const [suggested, setSuggested] = useState(() => randomReg())
+  const [acType, setAcType]         = useState('Robin DR400')
 
   const formatReg = (raw) => { const l = raw.replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,5); return l.length <= 1 ? l : l[0] + '-' + l.slice(1) }
   const rawReg       = regInput
@@ -244,6 +250,17 @@ function HomeScreen({ onStart, onResetKey }) {
             <div style={{ fontSize: 13, color: validManual ? '#93c5fd' : '#7dd3fc', fontFamily: "'Courier New',monospace", lineHeight: 1.6 }}>{toOACI(effectiveReg)}</div>
             <div style={{ fontSize: 12, color: '#60a5fa', fontWeight: 700, marginTop: 4, fontFamily: "'Courier New',monospace" }}>{effectiveReg} · Cessna 172</div>
           </div>
+        </div>
+
+        {/* Type avion */}
+        <div style={{ background:'#0d1829', border:'1px solid #1a2e4a', borderRadius:14, padding:'14px 18px', marginBottom:16 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:'#475569', letterSpacing:0.6, marginBottom:8 }}>TYPE AÉRONEF</div>
+          <input
+            value={acType}
+            onChange={e => setAcType(e.target.value)}
+            placeholder="ex: Robin DR400, Cessna 172, Piper PA28…"
+            style={{ width:'100%', background:'#060d18', border:'1px solid #1a2e4a', borderRadius:8, color:'#f0efe8', padding:'9px 13px', fontSize:14, outline:'none', fontFamily:"'Courier New',monospace" }}
+          />
         </div>
 
         {/* Scénarios */}
@@ -514,7 +531,13 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
 
   const togglePTT = () => {
     if (loading) return
-    if (atcSpeakingRef.current) { window.speechSynthesis.cancel(); atcSpeakingRef.current = false; setAtcSpeaking(false) }
+    if (atcSpeakingRef.current) {
+      window.speechSynthesis.cancel()
+      atcSpeakingRef.current = false
+      setAtcSpeaking(false)
+      // Court délai pour laisser l'audio s'arrêter avant d'ouvrir le micro
+      setTimeout(() => {}, 100)
+    }
 
     // ── Mode Whisper (OpenAI key dispo) ──────────────────────────────────────
     if (openAiKey) {
