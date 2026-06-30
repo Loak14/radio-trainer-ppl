@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#060d18" />
+  <title>Radio Trainer PPL</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { background: #060d18; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+// hooks disponibles via React global
+
+// ─── UTILS IMMAT ──────────────────────────────────────────────────────────────
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+const randomReg = () => { let s = 'F-'; for (let i = 0; i < 4; i++) s += LETTERS[Math.floor(Math.random() * 26)]; return s }
+
+const OACI_MAP = {
+  A:'Alpha',B:'Bravo',C:'Charlie',D:'Delta',E:'Echo',F:'Fox',  // Fox en France (Foxtrot OACI)
+  G:'Golf',H:'Hotel',I:'India',J:'Juliet',K:'Kilo',L:'Lima',
+  M:'Mike',N:'November',O:'Oscar',P:'Papa',Q:'Quebec',R:'Romeo',
+  S:'Sierra',T:'Tango',U:'Uniform',V:'Victor',W:'Whisky',X:'X-ray',
+  Y:'Yankee',Z:'Zulu',
+}
+const toOACI = (reg) => reg.replace(/-/g, '').toUpperCase().split('').map(c => OACI_MAP[c] || c).join(' ')
+const makeAircraft = (reg, type) => ({ callsign: reg, display: reg, type: type || 'Cessna 172' })
+
+// ─── DATA ─────────────────────────────────────────────────────────────────────
+
+const SCENARIOS = [
+  { id:'depart_lfma',   name:'Départ VFR',           emoji:'🛫', airport:'LFMA Aix-les-Milles',  description:'Sol 121.605 → Tour 118.750 → Décollage 32 → Départ CTR',        difficulty:'Débutant',      color:'#22c55e' },
+  { id:'arrivee_lfma',  name:'Arrivée VFR',           emoji:'🛬', airport:'LFMA Aix-les-Milles',  description:'Contact 3 min avant CTR → Tour 118.750 → Intégration E → RWY 32',    difficulty:'Débutant',      color:'#22c55e' },
+  { id:'navigation',    name:'Navigation VFR',        emoji:'✈️', airport:'LFMA → LFNV (Vinon)',  description:'Départ + comptes-rendus position + arrivée',      difficulty:'Intermédiaire', color:'#f59e0b' },
+  { id:'ctr_marseille', name:'Transit CTR Marseille', emoji:'🗼', airport:'Traversée LFML CTR',   description:'Demande clairance CTR → Transit → Sortie',        difficulty:'Avancé',        color:'#f97316' },
+  { id:'urgence',       name:'Situation dégradée',    emoji:'🚨', airport:'En route',             description:'Panne simulée → PAN PAN / MAYDAY → Guidage',     difficulty:'Expert',        color:'#ef4444' },
+]
+
+const OACI_ROWS = Object.entries(OACI_MAP)
+
+// ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
+
+const buildPrompt = (scenario, aircraft) => `Tu es un organisme AFIS/ATC français simulant des communications radio VFR réalistes pour l'entraînement PPL. Tu parles. Tu ne commentes pas.
+
+SCÉNARIO : ${scenario.name} — ${scenario.airport}
+AÉRONEF : ${aircraft.callsign} (${toOACI(aircraft.callsign)}), ${aircraft.type}
+
+DONNÉES VAC LFMA AIX-LES-MILLES — AIP FRANCE AMDT 02/26 (aérodrome CONTRÔLÉ) :
+- Pistes : 32 (QFU 324°) / 14 (QFU 144°) — préférentielle 32 (face au mistral)
+- Longueur : 1604m x 30m — TORA 32 : 1124m / TORA 14 : 1249m
+- Altitude terrain : 368 ft
+- ATIS : 136.230 MHz
+- Sol "Aix Sol" (GND) : 121.605 MHz — mise en route, roulage
+- Tour "Aix Tour" (TWR) : 118.750 MHz — décollage, atterrissage, intégration
+- Absence ATS hors horaires : Auto-information 118.750 MHz
+- Approche : Provence Approche 124.350 MHz (au-dessus 2500 ft, sur instruction ATC)
+- Horaires été : Lun-Sam 0600-1730 / Dim 0600-1700 UTC
+- Circuit : EST des installations, 1500 ft AMSL (1100 AGL) — 1er contact 3 min avant CTR
+- DEP RWY 32 : axe puis virage à droite (sauf clairance contraire)
+- DEP RWY 14 : axe puis virage à gauche au-delà prison de Luynes
+- ARR : verticale centre commercial (EST), éviter prison Luynes par le SUD
+- Transpondeur obligatoire pendant HOR ATS
+- Points de report : AN (Travers Eguilles W), AT (Carrefour Eguilles E), AE (Cheminée Gardanne N), AR (Bretelle A8 Aix W — panne radio), AS (Ouest Cabriès — CLR ATC), AW (Aqueduc Roquefavour — CLR ATC)
+- Parkings : Aire NOVEMBRE-ECHO (N1-N6), Aire SIERRA-ECHO (S1-S12), SIERRA herbe
+- NDB ALM 413 kHz, VDF sur terrain
+
+RÔLE :
+Tu joues "Aix Sol" (121.600), "Aix Tour" (118.750) et tous les organismes nécessaires selon le scénario.
+Utilise les vraies fréquences, la vraie piste, les vrais points de report PACA.
+
+RÈGLE ABSOLUE SUR LE FORMAT :
+atc_message = uniquement ce que tu dis à la radio.
+Texte brut. Zéro emoji. Zéro parenthèse. Zéro explication. Zéro conseil.
+Doit pouvoir être lu à voix haute tel quel, rien de plus.
+
+EXEMPLE ATIS LFMA :
+"Aix-les-Milles, information Bravo. Heure zéro-neuf-zéro-zéro. Vent zéro-trois-zéro, dix noeuds. Visibilité supérieure à dix kilomètres. Nuages épars deux mille pieds. Température vingt-deux, point de rosée quatorze. QNH un-zéro-un-trois. Piste en service trois-deux. Information Bravo."
+
+PHRASÉOLOGIE FRANCE DGAC :
+Structure pilote : DESTINATAIRE, ORIGINE, POSITION, DEMANDE
+Collationnement obligatoire : piste, QNH, fréquence, cap, altitude
+"Fox" pour F, "Bonjour" autorisé, "Bien reçu" plutôt que "Roger"
+Indicatif complet au premier contact, abrégé ensuite
+Affirmatif/Négatif — jamais Oui/Non
+Fin de vacation : "[indicatif], au revoir"
+
+FORMAT JSON STRICT — aucun texte avant/après, aucun markdown :
+{
+  "atc_message": "texte radio pur, lisible à voix haute, aucun emoji ni explication",
+  "atc_unit": "SOL|TOUR|APPROCHE|INFO|SYSTÈME",
+  "feedback": null,
+  "current_phase": "Phase en cours",
+  "scenario_complete": false
+}
+
+Quand le pilote a transmis, feedback :
+{
+  "atc_message": "...",
+  "atc_unit": "...",
+  "feedback": {
+    "score": 0-100,
+    "correct": ["point positif"],
+    "errors": ["erreur + explication courte"],
+    "correct_phrasing": "formulation idéale",
+    "tip": null
+  },
+  "current_phase": "...",
+  "scenario_complete": false
+}
+Pour l'initialisation, feedback = null obligatoirement.`
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+
+const parseResponse = (text) => {
+  try { return JSON.parse(text.replace(/```json\n?|```\n?/g, '').trim()) }
+  catch { return { atc_message: text, atc_unit: 'ATC', feedback: null, current_phase: '', scenario_complete: false } }
+}
+
+const scoreColor = (s) => s >= 80 ? '#22c55e' : s >= 60 ? '#f59e0b' : '#ef4444'
+
+// ─── COMPOSANTS UI ────────────────────────────────────────────────────────────
+
+function ScoreTag({ score }) {
+  return (
+    <span style={{ background: scoreColor(score) + '20', border: `1px solid ${scoreColor(score)}50`, color: scoreColor(score), borderRadius: 6, padding: '2px 9px', fontSize: 13, fontWeight: 700 }}>
+      {score}/100
+    </span>
+  )
+}
+
+function OACIPanel() {
+  return (
+    <div style={{ background: '#080e1a', borderBottom: '1px solid #1a2e4a', padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 3 }}>
+      {OACI_ROWS.map(([l, w]) => (
+        <div key={l} style={{ fontSize: 11, color: '#64748b' }}>
+          <span style={{ color: '#60a5fa', fontWeight: 700 }}>{l}</span> {w}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── ÉCRAN CLÉ API ────────────────────────────────────────────────────────────
+
+function ApiKeyScreen({ onSave }) {
+  const [antKey, setAntKey] = useState('')
+  const [oaiKey, setOaiKey] = useState(() => localStorage.getItem('openai_api_key') || '')
+  const [error, setError]   = useState('')
+
+  const handleSave = () => {
+    const trimmed = antKey.trim()
+    if (!trimmed.startsWith('sk-ant-')) { setError('La clé Anthropic doit commencer par sk-ant-…'); return }
+    localStorage.setItem('anthropic_api_key', trimmed)
+    const oaiTrimmed = oaiKey.trim()
+    if (oaiTrimmed) {
+      if (!oaiTrimmed.startsWith('sk-')) { setError('La clé OpenAI doit commencer par sk-…'); return }
+      localStorage.setItem('openai_api_key', oaiTrimmed)
+    }
+    onSave(trimmed, oaiTrimmed)
+  }
+
+  const inputStyle = (err) => ({ width: '100%', background: '#060d18', border: `1px solid ${err ? '#ef4444' : '#1a2e4a'}`, borderRadius: 8, color: '#f0efe8', padding: '10px 13px', fontSize: 14, fontFamily: "'Courier New',monospace", outline: 'none', marginBottom: 8 })
+
+  return (
+    <div style={{ background: '#060d18', minHeight: '100vh', color: '#f0efe8', fontFamily: "'Inter',-apple-system,sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ maxWidth: 480, width: '100%' }}>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔑</div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Configuration API</h1>
+          <p style={{ color: '#64748b', fontSize: 13, lineHeight: 1.6 }}>Clés stockées uniquement dans ton navigateur.</p>
+        </div>
+
+        <div style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '20px', marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 8 }}>CLÉ ANTHROPIC — obligatoire (ATC)</div>
+          <input type="password" value={antKey} onChange={e => { setAntKey(e.target.value); setError('') }} placeholder="sk-ant-api03-…" style={inputStyle(error)} />
+          {error && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 6 }}>{error}</div>}
+          <div style={{ fontSize: 11, color: '#334155' }}>→ <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>console.anthropic.com</a></div>
+        </div>
+
+        <div style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '20px', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 4 }}>CLÉ OPENAI — recommandée (reconnaissance vocale Whisper)</div>
+          <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 8 }}>Sans cette clé, la reconnaissance vocale sera imprécise sur le jargon aéro.</div>
+          <input type="password" value={oaiKey} onChange={e => setOaiKey(e.target.value)} placeholder="sk-proj-… ou sk-…" style={inputStyle(false)} />
+          <div style={{ fontSize: 11, color: '#334155' }}>→ <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>platform.openai.com</a></div>
+        </div>
+
+        <button onClick={handleSave} style={{ width: '100%', background: '#1d4ed8', border: 'none', borderRadius: 8, color: '#fff', padding: '12px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+          Enregistrer et continuer →
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── ÉCRAN HOME ───────────────────────────────────────────────────────────────
+
+function HomeScreen({ onStart, onResetKey }) {
+  const [showOACI, setShowOACI]   = useState(false)
+  const [regInput, setRegInput]   = useState('')
+  const [suggested, setSuggested] = useState(() => randomReg())
+  const [acType, setAcType]       = useState('Robin DR400')
+  const [confirmed, setConfirmed] = useState(true) // valide par défaut avec suggestion
+
+  const formatReg = (raw) => { const l = raw.replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,5); return l.length <= 1 ? l : l[0] + '-' + l.slice(1) }
+  const rawReg       = regInput
+  const validManual  = /^F-[A-Z]{4}$/.test(rawReg)
+  const isBadFormat  = regInput.length > 0 && !validManual
+  const effectiveReg = validManual ? rawReg : suggested
+  const borderColor  = validManual ? '#1d4ed8' : isBadFormat ? '#7f1d1d' : '#1a2e4a'
+  const effectiveType = acType.trim() || 'Robin DR400'
+
+  const handleStart = (scenario) => onStart(scenario, makeAircraft(effectiveReg, effectiveType))
+
+  return (
+    <div style={{ background: '#060d18', minHeight: '100vh', color: '#f0efe8', fontFamily: "'Inter',-apple-system,sans-serif", padding: '28px 16px' }}>
+      <div style={{ maxWidth: 560, margin: '0 auto' }}>
+
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ fontSize: 48, marginBottom: 10 }}>📡</div>
+          <h1 style={{ color: '#f0efe8', fontSize: 24, fontWeight: 800, margin: '0 0 6px', letterSpacing: '-0.4px' }}>Radio Trainer PPL</h1>
+          <p style={{ color: '#475569', margin: 0, fontSize: 13 }}>Phraséologie aéronautique française • Mode vocal</p>
+        </div>
+
+        {/* Immat + Type avion + Validation */}
+        <div style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '16px 18px', marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 10 }}>IMMATRICULATION AÉRONEF</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <input
+              value={regInput}
+              onChange={e => { setRegInput(formatReg(e.target.value)); setConfirmed(false) }}
+              placeholder={suggested}
+              maxLength={6}
+              style={{ flex: 1, background: '#060d18', border: `1px solid ${borderColor}`, borderRadius: 8, color: '#f0efe8', padding: '9px 13px', fontSize: 16, fontFamily: "'Courier New',monospace", outline: 'none', letterSpacing: 3, fontWeight: 700 }}
+            />
+            <button onClick={() => { setRegInput(''); setSuggested(randomReg()); setConfirmed(false) }}
+              style={{ background: '#0f2040', border: '1px solid #1a2e4a', borderRadius: 8, color: '#60a5fa', cursor: 'pointer', padding: '9px 14px', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🎲</button>
+          </div>
+
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 8 }}>TYPE AÉRONEF</div>
+          <input
+            value={acType}
+            onChange={e => { setAcType(e.target.value); setConfirmed(false) }}
+            placeholder="ex: Robin DR400, Cessna 172, Piper PA28…"
+            style={{ width: '100%', background: '#060d18', border: '1px solid #1a2e4a', borderRadius: 8, color: '#f0efe8', padding: '9px 13px', fontSize: 14, outline: 'none', fontFamily: "'Courier New',monospace", marginBottom: 14 }}
+          />
+
+          <div style={{ background: '#060d18', border: '1px solid #1a2e4a', borderRadius: 8, padding: '10px 13px', marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: '#334155', fontWeight: 600, letterSpacing: 0.5, marginBottom: 5 }}>
+              ÉPELLATION OACI
+              {validManual && <span style={{ color: '#22c55e', marginLeft: 8 }}>✓ validé</span>}
+              {isBadFormat && <span style={{ color: '#ef4444', marginLeft: 8 }}>format invalide (ex: F-GHAB)</span>}
+              {!validManual && !isBadFormat && <span style={{ color: '#475569', marginLeft: 8 }}>suggestion aléatoire</span>}
+            </div>
+            <div style={{ fontSize: 13, color: validManual ? '#93c5fd' : '#7dd3fc', fontFamily: "'Courier New',monospace", lineHeight: 1.6 }}>{toOACI(effectiveReg)}</div>
+            <div style={{ fontSize: 12, color: '#60a5fa', fontWeight: 700, marginTop: 4, fontFamily: "'Courier New',monospace" }}>{effectiveReg} · {effectiveType}</div>
+          </div>
+
+          <button
+            onClick={() => setConfirmed(true)}
+            disabled={isBadFormat}
+            style={{ width: '100%', background: confirmed ? '#052e16' : isBadFormat ? '#1a2e4a' : '#1d4ed8', border: confirmed ? '1px solid #15803d40' : 'none', borderRadius: 8, color: confirmed ? '#4ade80' : isBadFormat ? '#475569' : '#fff', padding: '10px', fontSize: 13, fontWeight: 700, cursor: isBadFormat ? 'not-allowed' : 'pointer' }}
+          >
+            {confirmed ? '✓ Validé — ' + effectiveReg + ' · ' + effectiveType : 'Valider'}
+          </button>
+        </div>
+
+        {/* Scénarios */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+          {SCENARIOS.map(s => (
+            <button key={s.id} onClick={() => handleStart(s)}
+              style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '16px 18px', textAlign: 'left', cursor: 'pointer', color: '#f0efe8', display: 'flex', alignItems: 'center', gap: 14 }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#111f35'; e.currentTarget.style.borderColor = '#1d4ed860' }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0d1829'; e.currentTarget.style.borderColor = '#1a2e4a' }}>
+              <span style={{ fontSize: 26, flexShrink: 0 }}>{s.emoji}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{s.name}</div>
+                <div style={{ fontSize: 11, color: '#475569', marginBottom: 2 }}>{s.airport}</div>
+                <div style={{ fontSize: 12, color: '#3b82f6' }}>{s.description}</div>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: s.color, background: s.color + '15', border: `1px solid ${s.color}30`, borderRadius: 6, padding: '3px 8px', whiteSpace: 'nowrap', flexShrink: 0 }}>{s.difficulty}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* OACI ref */}
+        <button onClick={() => setShowOACI(!showOACI)}
+          style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 10, padding: '9px 16px', cursor: 'pointer', color: '#475569', fontSize: 13, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <span>Alphabet OACI — référence rapide</span><span>{showOACI ? '▲' : '▼'}</span>
+        </button>
+        {showOACI && (
+          <div style={{ background: '#080e1a', border: '1px solid #1a2e4a', borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '12px 16px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 5, marginBottom: 8 }}>
+            {OACI_ROWS.map(([l, w]) => (
+              <div key={l} style={{ fontSize: 12, color: '#64748b' }}><span style={{ color: '#60a5fa', fontWeight: 700 }}>{l}</span> — {w}</div>
+            ))}
+          </div>
+        )}
+
+        <button onClick={onResetKey}
+          style={{ background: 'none', border: 'none', color: '#334155', fontSize: 12, cursor: 'pointer', width: '100%', textAlign: 'center' }}>
+          Changer la clé API
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── ÉCRAN TRAINING ───────────────────────────────────────────────────────────
+
+function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
+  const [messagesState, setMessagesState] = useState([])
+  const [loading, setLoading]             = useState(false)
+  const [feedback, setFeedback]           = useState(null)
+  const [showPhrasing, setShowPhrasing]   = useState(false)
+  const [showOACI, setShowOACI]           = useState(false)
+  const [currentPhase, setCurrentPhase]   = useState(scenario.airport)
+  const [scores, setScores]               = useState([])
+  const [complete, setComplete]           = useState(false)
+
+  // Voice
+  const [isListening, setIsListening]         = useState(false)
+  const [liveTranscript, setLiveTranscriptUI] = useState('')
+  const [atcSpeaking, setAtcSpeaking]         = useState(false)
+
+  const messagesRef       = useRef([])
+  const historyRef        = useRef([])
+  const liveTranscriptRef = useRef('')
+  const recognitionRef    = useRef(null)
+  const audioCtxRef       = useRef(null)
+  const atcSpeakingRef    = useRef(false)
+  const bottomRef         = useRef(null)
+
+  const setMessages = (val) => {
+    const next = typeof val === 'function' ? val(messagesRef.current) : val
+    messagesRef.current = next
+    setMessagesState(next)
+  }
+  const setLiveTranscript = (v) => { liveTranscriptRef.current = v; setLiveTranscriptUI(v) }
+
+  const sysPrompt = buildPrompt(scenario, aircraft)
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messagesState, feedback])
+
+  // ── Audio click ────────────────────────────────────────────────────────────
+  const getAudioCtx = () => {
+    if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
+    return audioCtxRef.current
+  }
+
+  const playClick = (open = true) => {
+    try {
+      const ctx = getAudioCtx(); const now = ctx.currentTime; const dur = 0.07
+      const sz = Math.floor(ctx.sampleRate * dur)
+      const buf = ctx.createBuffer(1, sz, ctx.sampleRate)
+      const data = buf.getChannelData(0)
+      for (let i = 0; i < sz; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / sz)
+      const src = ctx.createBufferSource(); src.buffer = buf
+      const filter = ctx.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = open ? 1400 : 900; filter.Q.value = 2
+      const gain = ctx.createGain(); gain.gain.setValueAtTime(open ? 0.35 : 0.22, now); gain.gain.exponentialRampToValueAtTime(0.001, now + dur)
+      src.connect(filter); filter.connect(gain); gain.connect(ctx.destination)
+      src.start(now); src.stop(now + dur)
+    } catch {}
+  }
+
+  // ── TTS ATC ────────────────────────────────────────────────────────────────
+  const speakATC = useCallback((text) => {
+    atcSpeakingRef.current = true
+    setAtcSpeaking(true)
+    playClick(true)
+
+    const wordCount = text.trim().split(/\s+/).length
+    const safetyMs  = Math.max(4000, wordCount * 500) + 2000
+
+    return new Promise((resolve) => {
+      let resolved = false
+      const done = () => {
+        if (resolved) return; resolved = true
+        playClick(false); atcSpeakingRef.current = false; setAtcSpeaking(false); resolve()
+      }
+      const safety = setTimeout(done, safetyMs)
+
+      const webSpeechFallback = () => {
+        const doSpeak = () => {
+          try {
+            window.speechSynthesis.cancel()
+            const utter = new SpeechSynthesisUtterance(text)
+            utter.lang = 'fr-FR'; utter.rate = 0.95; utter.pitch = 0.85; utter.volume = 1
+            const voices  = window.speechSynthesis.getVoices()
+            const frVoice = voices.find(v => v.lang.startsWith('fr') && /Henri|Denise|Paul/i.test(v.name))
+              || voices.find(v => v.lang.startsWith('fr') && /Natural|Neural|Premium|Enhanced|Online/i.test(v.name))
+              || voices.find(v => v.lang.startsWith('fr') && /Google/i.test(v.name))
+              || voices.find(v => v.lang === 'fr-FR' && v.name === 'Thomas')
+              || voices.find(v => v.lang.startsWith('fr'))
+            if (frVoice) utter.voice = frVoice
+            utter.onend = () => { clearTimeout(safety); setTimeout(done, 200) }
+            utter.onerror = () => { clearTimeout(safety); done() }
+            window.speechSynthesis.speak(utter)
+          } catch { clearTimeout(safety); done() }
+        }
+        setTimeout(() => {
+          try {
+            if (window.speechSynthesis.getVoices().length > 0) doSpeak()
+            else window.speechSynthesis.addEventListener('voiceschanged', doSpeak, { once: true })
+          } catch { clearTimeout(safety); done() }
+        }, 250)
+      }
+
+      if (!openAiKey) { webSpeechFallback(); return }
+
+      // OpenAI TTS + filtre radio
+      fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + openAiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'tts-1-hd', input: text, voice: 'onyx', response_format: 'mp3', speed: 1.0 }),
+      })
+      .then(function(res) { if (!res.ok) throw new Error('TTS ' + res.status); return res.arrayBuffer() })
+      .then(function(buf) { return getAudioCtx().decodeAudioData(buf) })
+      .then(function(audioBuffer) {
+        var ctx    = getAudioCtx()
+        var source = ctx.createBufferSource(); source.buffer = audioBuffer
+        var hp = ctx.createBiquadFilter(); hp.type = 'highpass';  hp.frequency.value = 280;  hp.Q.value = 0.7
+        var lp = ctx.createBiquadFilter(); lp.type = 'lowpass';   lp.frequency.value = 3200; lp.Q.value = 0.7
+        var pk = ctx.createBiquadFilter(); pk.type = 'peaking';   pk.frequency.value = 1800; pk.gain.value = 4; pk.Q.value = 1.2
+        var wave = ctx.createWaveShaper()
+        var k = 30; var curve = new Float32Array(256)
+        for (var i = 0; i < 256; i++) { var x = (i * 2) / 256 - 1; curve[i] = ((Math.PI + k) * x) / (Math.PI + k * Math.abs(x)) }
+        wave.curve = curve
+        var gain = ctx.createGain(); gain.gain.value = 1.3
+        source.connect(hp); hp.connect(lp); lp.connect(pk); pk.connect(wave); wave.connect(gain); gain.connect(ctx.destination)
+        source.onended = function() { clearTimeout(safety); setTimeout(done, 200) }
+        source.start(0)
+      })
+      .catch(function(e) {
+        console.error('OpenAI TTS error:', e)
+        clearTimeout(safety)
+        webSpeechFallback()
+      })
+    })
+  }, [openAiKey])
+
+  // ── API ────────────────────────────────────────────────────────────────────
+  const callAPI = async (msgs) => {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, system: sysPrompt, messages: msgs }),
+    })
+    const data = await res.json()
+    if (data.error) throw new Error(data.error.message)
+    return parseResponse(data.content[0].text)
+  }
+
+  // ── Envoi message ──────────────────────────────────────────────────────────
+  const sendMessage = useCallback(async (pilotMsg) => {
+    if (!pilotMsg.trim() || loading) return
+    setLoading(true); setFeedback(null); setShowPhrasing(false)
+    const withPilot = [...messagesRef.current, { type: 'pilot', content: pilotMsg }]
+    setMessages(withPilot)
+    const newHistory = [...historyRef.current, { role: 'user', content: `[TRANSMISSION PILOTE ${aircraft.callsign}]: ${pilotMsg}` }]
+    try {
+      const parsed = await callAPI(newHistory)
+      historyRef.current = [...newHistory, { role: 'assistant', content: JSON.stringify(parsed) }]
+      setMessages([...withPilot, { type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase }])
+      if (parsed.feedback) { setFeedback(parsed.feedback); if (typeof parsed.feedback.score === 'number') setScores(p => [...p, parsed.feedback.score]) }
+      if (parsed.current_phase) setCurrentPhase(parsed.current_phase)
+      if (parsed.scenario_complete) setComplete(true)
+      await speakATC(parsed.atc_message)
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }, [loading, aircraft, speakATC, sysPrompt, apiKey])
+
+  // ── Init scénario ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    ;(async () => {
+      setLoading(true)
+      const init = `Lance le scénario "${scenario.name}" à ${scenario.airport}. Donne le contexte (heure UTC, météo, ATIS si applicable) et attends ma première transmission.`
+      const initHist = [{ role: 'user', content: init }]
+      try {
+        const parsed = await callAPI(initHist)
+        historyRef.current = [...initHist, { role: 'assistant', content: JSON.stringify(parsed) }]
+        setMessages([{ type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase }])
+        if (parsed.current_phase) setCurrentPhase(parsed.current_phase)
+          await speakATC(parsed.atc_message)
+      } catch (e) { console.error(e) }
+      setLoading(false)
+    })()
+  }, [])
+
+  // ── PTT : Whisper si clé OpenAI dispo, sinon Web Speech ──────────────────
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef   = useRef([])
+
+  const transcribeWhisper = async (blob) => {
+    console.log('Whisper: taille blob =', blob.size, '| type =', blob.type)
+    if (blob.size < 500) {
+      setLiveTranscript('Audio trop court — réessaie')
+      setTimeout(() => setLiveTranscript(''), 2000)
+      return null
+    }
+    setLiveTranscript('Transcription Whisper…')
+    const form = new FormData()
+    form.append('file', blob, 'audio.webm')
+    form.append('model', 'whisper-1')
+    form.append('language', 'fr')
+    form.append('prompt', 'QNH, ATIS, VFR, piste, Aix Information, Fox Golf Hotel Alpha Bravo, affirmatif, négatif, bien reçu, collationnement, décollage, atterrissage, alignement, clairance, transpondeur')
+    try {
+      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${openAiKey}` },
+        body: form,
+      })
+      const data = await res.json()
+      console.log('Whisper réponse:', JSON.stringify(data))
+      if (data.error) {
+        setLiveTranscript('Erreur Whisper : ' + data.error.message)
+        setTimeout(() => setLiveTranscript(''), 4000)
+        return null
+      }
+      return data.text || null
+    } catch (e) {
+      console.error('Whisper erreur réseau:', e)
+      setLiveTranscript('Erreur réseau — voir console (F12)')
+      setTimeout(() => setLiveTranscript(''), 4000)
+      return null
+    }
+  }
+
+  const togglePTT = () => {
+    if (loading) return
+    if (atcSpeakingRef.current) {
+      window.speechSynthesis.cancel()
+      atcSpeakingRef.current = false
+      setAtcSpeaking(false)
+      // Court délai pour laisser l'audio s'arrêter avant d'ouvrir le micro
+      setTimeout(() => {}, 100)
+    }
+
+    // ── Mode Whisper (OpenAI key dispo) ──────────────────────────────────────
+    if (openAiKey) {
+      if (isListening) {
+        // Arrêter l'enregistrement → transcription → envoi
+        mediaRecorderRef.current?.stop()
+        return
+      }
+      setLiveTranscript('')
+      audioChunksRef.current = []
+      navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(stream => {
+          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
+          const rec = new MediaRecorder(stream, { mimeType })
+          rec.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data) }
+          rec.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop())
+            setIsListening(false)
+            playClick(false)
+            const blob = new Blob(audioChunksRef.current, { type: mimeType })
+            const text = await transcribeWhisper(blob)
+            if (text && text.trim()) {
+              setLiveTranscript(text)           // afficher ce que Whisper a compris
+              setTimeout(() => {
+                setLiveTranscript('')
+                sendMessage(text)
+              }, 900)                           // bref délai pour lire avant envoi
+            }
+          }
+          rec.start(100)
+          mediaRecorderRef.current = rec
+          setIsListening(true)
+          playClick(true)
+        })
+        .catch(() => alert('Accès micro refusé.'))
+      return
+    }
+
+    // ── Fallback Web Speech (pas de clé OpenAI) ──────────────────────────────
+    if (isListening) { recognitionRef.current?.stop(); return }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) { alert('Reconnaissance vocale non disponible. Essaie Chrome.'); return }
+    setLiveTranscript('')
+    const r = new SR()
+    r.lang = 'fr-FR'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1
+    r.onstart  = () => { setIsListening(true); playClick(true) }
+    r.onresult = (e) => {
+      let final = '', interim = ''
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + ' '
+        else interim += e.results[i][0].transcript
+      }
+      setLiveTranscript((final + interim).trim())
+    }
+    r.onend = () => {
+      setIsListening(false); playClick(false)
+      const t = liveTranscriptRef.current; setLiveTranscript('')
+      if (t.trim()) sendMessage(t)
+    }
+    r.onerror = (e) => { setIsListening(false); setLiveTranscript('') }
+    recognitionRef.current = r
+    try { r.start() } catch {}
+  }
+
+  const replayATC = () => {
+    const last = messagesRef.current.filter(m => m.type === 'atc').slice(-1)[0]
+    if (last) speakATC(last.content)
+  }
+
+  const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null
+
+  const pttActive  = isListening
+  const pttDisabled = loading
+  const pttColor   = pttActive ? '#ef4444' : pttDisabled ? '#1a2e4a' : '#1d4ed8'
+  const pttLabel   = atcSpeaking ? 'ATC…' : loading ? '…' : isListening ? 'ÉMISSION' : 'PTT'
+
+  return (
+    <div style={{ background: '#060d18', height: '100vh', color: '#f0efe8', fontFamily: "'Inter',-apple-system,sans-serif", display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* Header */}
+      <div style={{ background: '#0d1829', borderBottom: '1px solid #1a2e4a', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <button onClick={() => { window.speechSynthesis.cancel(); onBack() }} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 18, padding: '2px 4px', lineHeight: 1 }}>←</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{scenario.emoji} {scenario.name}</div>
+          <div style={{ fontSize: 11, color: '#475569', marginTop: 1 }}>{currentPhase}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {avg !== null && <ScoreTag score={avg} />}
+          {openAiKey && <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: '#052e16', border: '1px solid #15803d40', borderRadius: 4, padding: '2px 6px' }}>WHISPER</span>}
+          <button onClick={replayATC} style={{ background: 'transparent', border: '1px solid #1a2e4a', borderRadius: 6, color: '#60a5fa', cursor: 'pointer', fontSize: 15, padding: '4px 8px', lineHeight: 1 }}>🔊</button>
+          <button onClick={() => setShowOACI(!showOACI)} style={{ background: showOACI ? '#0f2040' : 'transparent', border: '1px solid #1a2e4a', borderRadius: 6, color: '#60a5fa', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '4px 9px' }}>OACI</button>
+        </div>
+      </div>
+
+      {/* Barre callsign */}
+      <div style={{ background: '#080e1a', borderBottom: '1px solid #1a2e4a', padding: '7px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ fontFamily: "'Courier New',monospace", fontSize: 16, fontWeight: 700, letterSpacing: 3, color: '#f0efe8' }}>{aircraft.callsign}</div>
+          <div style={{ width: 1, height: 16, background: '#1a2e4a' }} />
+          <div style={{ fontFamily: "'Courier New',monospace", fontSize: 11, color: '#60a5fa', letterSpacing: 0.5 }}>{toOACI(aircraft.callsign)}</div>
+        </div>
+        <div style={{ fontSize: 11, color: '#334155', fontFamily: "'Courier New',monospace" }}>{aircraft.type}</div>
+      </div>
+
+      {showOACI && <OACIPanel />}
+
+      {/* Transcript */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px 4px' }}>
+        {messagesState.map((msg, i) => (
+          <div key={i} style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', alignItems: msg.type === 'pilot' ? 'flex-end' : 'flex-start' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.6, color: msg.type === 'pilot' ? '#4ade80' : '#60a5fa', marginBottom: 3 }}>
+              {msg.type === 'atc' ? `📡 ${msg.unit || 'ATC'}${msg.phase ? ` · ${msg.phase}` : ''}` : `🎙️ ${aircraft.callsign}`}
+            </div>
+            <div style={{ maxWidth: '90%', background: msg.type === 'pilot' ? '#071a0f' : '#080f1e', border: `1px solid ${msg.type === 'pilot' ? '#15803d40' : '#1d4ed840'}`, borderRadius: msg.type === 'pilot' ? '12px 12px 3px 12px' : '12px 12px 12px 3px', padding: '9px 13px', fontSize: 14, lineHeight: 1.6, color: msg.type === 'pilot' ? '#86efac' : '#93c5fd', fontFamily: "'Courier New',monospace" }}>
+              {msg.content}
+            </div>
+          </div>
+        ))}
+        {atcSpeaking && <div style={{ color: '#60a5fa', fontSize: 13, padding: '4px 0' }}>📡 ATC en communication…</div>}
+        {loading && !atcSpeaking && <div style={{ color: '#334155', fontSize: 13, padding: '4px 0' }}>⊙ Traitement…</div>}
+        {complete && (
+          <div style={{ textAlign: 'center', padding: '20px 16px', background: '#071a0f', border: '1px solid #15803d40', borderRadius: 14, margin: '12px 0' }}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
+            <div style={{ fontWeight: 700, color: '#4ade80', fontSize: 16, marginBottom: 4 }}>Scénario terminé</div>
+            {avg !== null && <div style={{ color: '#64748b', fontSize: 14, marginBottom: 12 }}>Score moyen : <strong style={{ color: scoreColor(avg) }}>{avg}/100</strong> · {scores.length} échanges</div>}
+            <button onClick={() => { window.speechSynthesis.cancel(); onBack() }} style={{ background: '#15803d', border: 'none', color: '#f0efe8', borderRadius: 8, padding: '8px 20px', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>Choisir un autre scénario</button>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Feedback */}
+      {feedback && (
+        <div style={{ background: '#080e1a', borderTop: '1px solid #1a2e4a', padding: '10px 14px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#334155', letterSpacing: 0.6 }}>ÉVALUATION</span>
+            <ScoreTag score={feedback.score} />
+            <button onClick={() => setShowPhrasing(!showPhrasing)} style={{ marginLeft: 'auto', background: showPhrasing ? '#0f2040' : 'transparent', border: '1px solid #1a2e4a', color: '#64748b', borderRadius: 6, padding: '3px 9px', cursor: 'pointer', fontSize: 11 }}>
+              {showPhrasing ? 'Cacher' : 'Phraséologie idéale'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 4 }}>
+            {(feedback.correct || []).map((c, i) => <div key={i} style={{ fontSize: 12, color: '#4ade80' }}>✓ {c}</div>)}
+            {(feedback.errors || []).map((e, i) => <div key={i} style={{ fontSize: 12, color: '#f87171' }}>✗ {e}</div>)}
+          </div>
+          {showPhrasing && feedback.correct_phrasing && (
+            <div style={{ background: '#080f1e', border: '1px solid #1d4ed830', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#93c5fd', fontFamily: "'Courier New',monospace", marginBottom: 4 }}>✈️ {feedback.correct_phrasing}</div>
+          )}
+          {feedback.tip && <div style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>💡 {feedback.tip}</div>}
+        </div>
+      )}
+
+
+
+      {/* Zone PTT */}
+      {!complete && (
+        <div style={{ background: '#0d1829', borderTop: '1px solid #1a2e4a', padding: '14px 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          {(isListening || liveTranscript) && (
+            <div style={{ width: '100%', background: '#071a0f', border: '1px solid #15803d40', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#86efac', fontFamily: "'Courier New',monospace", minHeight: 36 }}>
+              {liveTranscript || <span style={{ color: '#334155' }}>En attente…</span>}
+            </div>
+          )}
+          <button
+            onClick={togglePTT}
+            disabled={pttDisabled}
+            style={{ width: 90, height: 90, borderRadius: '50%', background: pttActive ? '#7f1d1d' : pttDisabled ? '#0d1829' : '#0f2040', border: `3px solid ${pttColor}`, boxShadow: pttActive ? '0 0 0 12px #ef444428, 0 0 30px #ef444450' : pttDisabled ? 'none' : `0 0 0 4px ${pttColor}18`, cursor: pttDisabled ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, transition: 'all 0.12s', userSelect: 'none', outline: 'none' }}
+          >
+            <span style={{ fontSize: 30, lineHeight: 1, pointerEvents: 'none' }}>{atcSpeaking ? '📡' : isListening ? '🔴' : '🎙️'}</span>
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.5, pointerEvents: 'none', color: pttActive ? '#ef4444' : pttDisabled ? '#334155' : '#60a5fa' }}>{pttLabel}</span>
+          </button>
+          <div style={{ fontSize: 11, color: '#475569', textAlign: 'center' }}>
+            {isListening ? 'Appuyez à nouveau pour envoyer' : atcSpeaking ? 'Appuyez pour interrompre' : loading ? '' : 'Appuyez pour parler'}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [apiKey, setApiKey]     = useState(() => localStorage.getItem('anthropic_api_key') || '')
+  const [openAiKey, setOpenAiKey] = useState(() => localStorage.getItem('openai_api_key') || '')
+  const [session, setSession]   = useState(null)
+
+  if (!apiKey) return <ApiKeyScreen onSave={(ak, ok) => { setApiKey(ak); setOpenAiKey(ok) }} />
+
+  if (!session) return (
+    <HomeScreen
+      onStart={(s, a) => setSession({ scenario: s, aircraft: a })}
+      onResetKey={() => { setApiKey('') }}
+    />
+  )
+
+  return (
+    <TrainingScreen
+      key={session.scenario.id + session.aircraft.callsign}
+      scenario={session.scenario}
+      aircraft={session.aircraft}
+      apiKey={apiKey}
+      openAiKey={openAiKey}
+      onBack={() => setSession(null)}
+    />
+  )
+}
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
