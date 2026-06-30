@@ -93,10 +93,32 @@ Indicatif complet au premier contact, abrégé ensuite
 Affirmatif/Négatif — jamais Oui/Non
 Fin de vacation : "[indicatif], au revoir"
 
+NOM DE STATION — RÈGLE STRICTE :
+Le nom de la station se dit tel quel, jamais de mot de liaison inventé.
+"Aix Sol" se dit "Aix Sol" — jamais "Aix sur Sol".
+"Aix Tour" se dit "Aix Tour" — jamais "Aix sur Tour" ni "Aix à la Tour".
+N'insère aucune préposition entre le nom du terrain et l'organisme.
+
+TYPE AVION — LECTURE, PAS ÉPELLATION :
+Le type d'aéronef (ex: PS28, DR400, PA28, C172) NE S'ÉPELLE JAMAIS lettre par lettre avec l'alphabet OACI.
+Il se lit normalement comme un pilote le prononcerait à l'oral : "PS28" se dit "Pé-Esse-vingt-huit", "DR400" se dit "Dé-Air-quatre-cents", "PA28" se dit "Pé-A-vingt-huit".
+Seul l'INDICATIF DE L'AÉRONEF (immatriculation F-XXXX) s'épelle en alphabet OACI, jamais le type avion.
+
+POINT DE DÉPART DU SCÉNARIO :
+Le pilote a déjà effectué sa mise en route moteur avant le premier contact radio.
+Ne propose jamais de clairance de mise en route. Le premier contact pilote concerne directement la demande de roulage (push-back/roulage vers piste), pas le démarrage moteur.
+
+ATIS — DOUBLE FORMAT (uniquement quand le message contient une ATIS) :
+Quand atc_unit est lié à une diffusion ATIS, ajoute le champ "metar_display" en plus de atc_message.
+metar_display = format brut façon METAR/code aéro avec chiffres compacts, ex: "LFMA 090900Z 03010KT CAVOK 22/14 Q1013 RWY32 INFO BRAVO".
+atc_message reste la version parlée en mots pour la voix : "Aix-les-Milles, information Bravo. Heure zéro-neuf-zéro-zéro..."
+Pour tous les autres messages (non-ATIS), metar_display = null.
+
 FORMAT JSON STRICT — aucun texte avant/après, aucun markdown :
 {
   "atc_message": "texte radio pur, lisible à voix haute, aucun emoji ni explication",
   "atc_unit": "SOL|TOUR|APPROCHE|INFO|SYSTÈME",
+  "metar_display": null,
   "feedback": null,
   "current_phase": "Phase en cours",
   "scenario_complete": false
@@ -106,6 +128,7 @@ Quand le pilote a transmis, feedback :
 {
   "atc_message": "...",
   "atc_unit": "...",
+  "metar_display": null,
   "feedback": {
     "score": 0-100,
     "correct": ["point positif"],
@@ -122,7 +145,7 @@ Pour l'initialisation, feedback = null obligatoirement.`
 
 const parseResponse = (text) => {
   try { return JSON.parse(text.replace(/```json\n?|```\n?/g, '').trim()) }
-  catch { return { atc_message: text, atc_unit: 'ATC', feedback: null, current_phase: '', scenario_complete: false } }
+  catch { return { atc_message: text, atc_unit: 'ATC', metar_display: null, feedback: null, current_phase: '', scenario_complete: false } }
 }
 
 const scoreColor = (s) => s >= 80 ? '#22c55e' : s >= 60 ? '#f59e0b' : '#ef4444'
@@ -420,7 +443,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
       fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + openAiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'tts-1-hd', input: text, voice: 'onyx', response_format: 'mp3', speed: 1.0 }),
+        body: JSON.stringify({ model: 'tts-1-hd', input: text, voice: 'echo', response_format: 'mp3', speed: 0.98 }),
       })
       .then(function(res) { if (!res.ok) throw new Error('TTS ' + res.status); return res.arrayBuffer() })
       .then(function(buf) { return getAudioCtx().decodeAudioData(buf) })
@@ -474,7 +497,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
     try {
       const parsed = await callAPI(newHistory)
       historyRef.current = [...newHistory, { role: 'assistant', content: JSON.stringify(parsed) }]
-      setMessages([...withPilot, { type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase }])
+      setMessages([...withPilot, { type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase, metar: parsed.metar_display }])
       if (parsed.feedback) { setFeedback(parsed.feedback); if (typeof parsed.feedback.score === 'number') setScores(p => [...p, parsed.feedback.score]) }
       if (parsed.current_phase) setCurrentPhase(parsed.current_phase)
       if (parsed.scenario_complete) setComplete(true)
@@ -492,7 +515,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
       try {
         const parsed = await callAPI(initHist)
         historyRef.current = [...initHist, { role: 'assistant', content: JSON.stringify(parsed) }]
-        setMessages([{ type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase }])
+        setMessages([{ type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase, metar: parsed.metar_display }])
         if (parsed.current_phase) setCurrentPhase(parsed.current_phase)
           await speakATC(parsed.atc_message)
       } catch (e) { console.error(e) }
@@ -663,6 +686,11 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
             </div>
             <div style={{ maxWidth: '90%', background: msg.type === 'pilot' ? '#071a0f' : '#080f1e', border: `1px solid ${msg.type === 'pilot' ? '#15803d40' : '#1d4ed840'}`, borderRadius: msg.type === 'pilot' ? '12px 12px 3px 12px' : '12px 12px 12px 3px', padding: '9px 13px', fontSize: 14, lineHeight: 1.6, color: msg.type === 'pilot' ? '#86efac' : '#93c5fd', fontFamily: "'Courier New',monospace" }}>
               {msg.content}
+              {msg.metar && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #1d4ed840', fontSize: 11, color: '#fbbf24', letterSpacing: 0.5 }}>
+                  {msg.metar}
+                </div>
+              )}
             </div>
           </div>
         ))}
