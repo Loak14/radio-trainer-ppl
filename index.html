@@ -40,7 +40,7 @@ const makeAircraft = (reg, type) => ({ callsign: reg, display: reg, type: type |
 const SCENARIOS = [
   { id:'depart_lfma',   name:'Départ VFR',           emoji:'🛫', airport:'LFMA Aix-les-Milles',  description:'Sol 121.605 → Tour 118.750 → Décollage 32 → Départ CTR',        difficulty:'Débutant',      color:'#22c55e' },
   { id:'arrivee_lfma',  name:'Arrivée VFR',           emoji:'🛬', airport:'LFMA Aix-les-Milles',  description:'Contact 3 min avant CTR → Tour 118.750 → Intégration E → RWY 32',    difficulty:'Débutant',      color:'#22c55e' },
-  { id:'navigation',    name:'Navigation VFR',        emoji:'✈️', airport:'LFMA → LFNV (Vinon)',  description:'Départ + comptes-rendus position + arrivée',      difficulty:'Intermédiaire', color:'#f59e0b' },
+  { id:'navigation',    name:'Navigation VFR',        emoji:'✈️', airport:'LFMA → LFNF (Vinon)',  description:'Départ + comptes-rendus position + arrivée',      difficulty:'Intermédiaire', color:'#f59e0b' },
   { id:'ctr_marseille', name:'Transit CTR Marseille', emoji:'🗼', airport:'Traversée LFML CTR',   description:'Demande clairance CTR → Transit → Sortie',        difficulty:'Avancé',        color:'#f97316' },
   { id:'urgence',       name:'Situation dégradée',    emoji:'🚨', airport:'En route',             description:'Panne simulée → PAN PAN / MAYDAY → Guidage',     difficulty:'Expert',        color:'#ef4444' },
 ]
@@ -49,13 +49,17 @@ const OACI_ROWS = Object.entries(OACI_MAP)
 
 // ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
 
-const buildPrompt = (scenario, aircraft) => `Tu es un organisme AFIS/ATC français simulant des communications radio VFR réalistes pour l'entraînement PPL. Tu parles. Tu ne commentes pas.
+// ─── DONNÉES VAC AÉRODROMES ───────────────────────────────────────────────────
+// Chaque entrée = uniquement des données extraites de la carte VAC officielle AIP France.
+// Pour ajouter un aérodrome : fournir la VAC (PDF officiel SIA) et l'entrée est créée à l'identique.
 
-SCÉNARIO : ${scenario.name} — ${scenario.airport}
-AÉRONEF : ${aircraft.callsign} (${toOACI(aircraft.callsign)}), ${aircraft.type}
-
-DONNÉES VAC LFMA AIX-LES-MILLES — AIP FRANCE AMDT 02/26 (aérodrome CONTRÔLÉ) :
-- Pistes : 32 (QFU 324°) / 14 (QFU 144°) — préférentielle 32 (face au mistral)
+const AIRPORTS = {
+  LFMA: {
+    icao: 'LFMA',
+    name: 'AIX-LES-MILLES',
+    amdt: 'AIP FRANCE AMDT 02/26',
+    controlled: true,
+    vac: `- Pistes : 32 (QFU 324°) / 14 (QFU 144°) — préférentielle 32 (face au mistral)
 - Longueur : 1604m x 30m — TORA 32 : 1124m / TORA 14 : 1249m
 - Altitude terrain : 368 ft
 - ATIS : 136.230 MHz
@@ -73,31 +77,77 @@ DONNÉES VAC LFMA AIX-LES-MILLES — AIP FRANCE AMDT 02/26 (aérodrome CONTRÔL�
 - Parkings : Aire NOVEMBRE-ECHO (N1-N6), Aire SIERRA-ECHO (S1-S12), SIERRA herbe
 - NDB ALM 413 kHz, VDF sur terrain
 - Voies de circulation : TWY A, B, C, D (entre parking et piste)
-- Points d'attente intermédiaires : P2, P3 (avant pénétration zone trafic)
-- Point d'arrêt piste 32 : au seuil 32, via TWY appropriée
-- Point d'arrêt piste 14 : au seuil 14, via TWY appropriée
+- Points d'attente intermédiaires : P2 et P3 (situés entre les TWY, avant pénétration zone de trafic)
+- Depuis le parking SIERRA-ECHO (zone Sud, aéroclubs) : le point d'attente est P2 ou P3 selon la TWY empruntée
+- Depuis le parking NOVEMBRE-ECHO (zone Nord) : roulage similaire via TWY vers point d'attente P2/P3 selon piste active
 - Dégagement piste après atterrissage : par le 2ème TWY sauf instruction contraire
-- Aire d'essai moteur avec mur anti-bruit (30x27m) disponible côté Sol
+- Aire d'essai moteur avec mur anti-bruit (30x27m) disponible côté Sol`,
+  },
+}
 
-CLAIRANCE ROULAGE — RÈGLE OBLIGATOIRE :
-Quand tu délivres une clairance de roulage, tu DOIS systématiquement préciser :
-1. La voie de circulation à emprunter (TWY A, B, C ou D selon position parking et piste active)
-2. Le point d'attente à respecter avant la piste (P2 ou P3 selon configuration, ou directement le point d'arrêt piste)
+// ─── RÉGISTRE AÉRODROMES ───────────────────────────────────────────────────────
+// Chaque entrée provient exclusivement de la carte VAC officielle (AIP France / SIA).
+// Pour ajouter un aérodrome : fournir son nom ou code OACI à Claude en conversation,
+// qui va chercher la VAC officielle et ajoute l'entrée ici avant de republier l'app.
+
+const getAllAirports = () => AIRPORTS
+
+
+const buildPrompt = (scenario, aircraft, airportCode, destinationCode) => {
+  const all = getAllAirports()
+  const airport = all[airportCode] || all.LFMA
+  const destination = destinationCode && destinationCode !== airportCode ? all[destinationCode] : null
+  return `Tu es un organisme ${airport.controlled ? 'ATC (Sol/Tour)' : 'AFIS'} français simulant des communications radio VFR réalistes pour l'entraînement PPL. Tu parles. Tu ne commentes pas.
+
+SCÉNARIO : ${scenario.name} — ${airport.name} (${airport.icao})
+AÉRONEF : ${aircraft.callsign} (${toOACI(aircraft.callsign)}), ${aircraft.type}
+
+DONNÉES VAC ${airport.name} — ${airport.amdt} (aérodrome ${airport.controlled ? 'CONTRÔLÉ' : 'AFIS'}) :
+${airport.vac}
+${destination ? `
+
+DONNÉES VAC AÉRODROME DE DESTINATION ${destination.name} — ${destination.amdt} (aérodrome ${destination.controlled ? 'CONTRÔLÉ' : 'AFIS'}) :
+${destination.vac}
+
+GESTION DU VOL EN DEUX AÉRODROMES :
+Ce scénario comporte un départ de ${airport.name} et une arrivée à ${destination.name}.
+Au départ, tu joues les organismes de ${airport.name} (Sol/Tour) jusqu'à la sortie de zone.
+En croisière, tu peux jouer un organisme d'information de vol générique (Info, sans fréquence précise si non fournie) pour les comptes-rendus de position.
+À l'approche de ${destination.name}, tu bascules sur les organismes de cet aérodrome (en te présentant explicitement, ex: "${destination.name} Information" ou équivalent selon les données fournies) pour l'intégration et l'atterrissage.
+Ne mélange jamais les fréquences ou identifiants des deux aérodromes — chaque organisme reste propre à son terrain.` : ''}
+
+RÈGLE ANTI-INVENTION — ABSOLUE ET NON NÉGOCIABLE :
+Tu n'utilises QUE les données VAC listées ci-dessus. Tu n'inventes JAMAIS une fréquence, une voie de circulation, un point d'attente, une piste ou un point de report qui n'y figure pas explicitement.
+Si une information nécessaire au scénario n'est pas dans les données fournies, tu restes volontairement vague plutôt que d'halluciner un détail technique précis (ex: dire "roulez vers la piste active" plutôt qu'inventer un nom de TWY qui n'existe pas).
+Cette règle prime sur toute autre considération de réalisme — un détail halluciné est une faute grave car le pilote s'entraîne sur ces informations pour de vrais aérodromes.
+
+CLAIRANCE ROULAGE — CONFORME AU MANUEL DSNA OFFICIEL (édition 15 avril 2023) :
+Depuis la réforme de 2017, le terme officiel est "POINT D'ATTENTE", jamais "point d'arrêt" (obsolète).
+Structure de clairance, dans cet ordre, max 3 éléments par message :
+1. Éventuel ordre de laisser passer un autre trafic croisant, si pertinent ("laissez passer [trafic] venant de votre droite/gauche")
+2. "roulez via [TWY], point d'attente [identifiant exact issu des données VAC]"
 3. Le QNH (à collationner)
-Exemple réaliste : "Fox Hotel Papa Sierra Alpha, Aix Sol, QNH un-zéro-un-huit, roulez point d'attente Papa 2 piste trois-deux via Alpha."
-Ne donne jamais une clairance de roulage vague sans TWY ni point d'attente précis.
+Le pilote collationne en répétant : "Je roule via [TWY], point d'attente [identifiant], [indicatif]."
+Ne donne jamais une clairance de roulage vague sans TWY ni point d'attente précis — sauf si ces données ne sont pas fournies pour cet aérodrome (voir RÈGLE ANTI-INVENTION).
 
-RÔLE :
-Tu joues "Aix Sol" (121.600), "Aix Tour" (118.750) et tous les organismes nécessaires selon le scénario.
-Utilise les vraies fréquences, la vraie piste, les vrais points de report PACA.
+RÉPONSE AU PREMIER CONTACT — RÈGLE ABSOLUE :
+Tu réponds TOUJOURS avec l'indicatif exact que le pilote vient de transmettre, jamais une formule générique.
+INTERDIT, ne jamais dire : "L'équipage qui appelle, parlez", "Allez-y", "Je vous écoute" seul, "Station appelante", ou toute formule vague.
+Si l'indicatif est clair dans la transmission du pilote, tu le répètes immédiatement suivi du nom de ta station.
+Si et seulement si la transmission était réellement inintelligible (jamais le cas par défaut), tu dis : "[fragment entendu], répétez votre indicatif" — jamais "parlez" ou "allez-y".
+
+EXEMPLE DE GABARIT D'ÉCHANGE RÉEL (structure à reproduire, adapter avec les VRAIES données VAC ci-dessus) :
+Pilote : "[Station] bonjour, [indicatif complet], [type avion], [nb personnes] à bord, [intentions], information [lettre], parking [nom], demande roulage."
+Contrôleur : "[indicatif], [station] bonjour, roulez via [TWY réelle], point d'attente [identifiant réel]."
+Pilote : "Je roule via [TWY], point d'attente [identifiant], [indicatif abrégé]."
+Contrôleur : "[indicatif abrégé], collationnement correct."
+
+Le contrôleur ne pose JAMAIS de question ouverte du type "que puis-je faire pour vous" — il traite l'information donnée par le pilote et répond avec une instruction ou une clairance concrète.
 
 RÈGLE ABSOLUE SUR LE FORMAT :
 atc_message = uniquement ce que tu dis à la radio.
 Texte brut. Zéro emoji. Zéro parenthèse. Zéro explication. Zéro conseil.
 Doit pouvoir être lu à voix haute tel quel, rien de plus.
-
-EXEMPLE ATIS LFMA :
-"Aix-les-Milles, information Bravo. Heure zéro-neuf-zéro-zéro. Vent zéro-trois-zéro, dix noeuds. Visibilité supérieure à dix kilomètres. Nuages épars deux mille pieds. Température vingt-deux, point de rosée quatorze. QNH un-zéro-un-trois. Piste en service trois-deux. Information Bravo."
 
 PHRASÉOLOGIE FRANCE DGAC :
 Structure pilote : DESTINATAIRE, ORIGINE, POSITION, DEMANDE
@@ -109,8 +159,7 @@ Fin de vacation : "[indicatif], au revoir"
 
 NOM DE STATION — RÈGLE STRICTE :
 Le nom de la station se dit tel quel, jamais de mot de liaison inventé.
-"Aix Sol" se dit "Aix Sol" — jamais "Aix sur Sol".
-"Aix Tour" se dit "Aix Tour" — jamais "Aix sur Tour" ni "Aix à la Tour".
+Exemple : "Aix Sol" se dit "Aix Sol" — jamais "Aix sur Sol". "Aix Tour" se dit "Aix Tour" — jamais "Aix sur Tour" ni "Aix à la Tour".
 N'insère aucune préposition entre le nom du terrain et l'organisme.
 
 TYPE AVION — LECTURE, PAS ÉPELLATION :
@@ -120,7 +169,7 @@ Seul l'INDICATIF DE L'AÉRONEF (immatriculation F-XXXX) s'épelle en alphabet OA
 
 POINT DE DÉPART DU SCÉNARIO :
 Le pilote a déjà effectué sa mise en route moteur avant le premier contact radio.
-Ne propose jamais de clairance de mise en route. Le premier contact pilote concerne directement la demande de roulage (push-back/roulage vers piste), pas le démarrage moteur.
+Ne propose jamais de clairance de mise en route. Le premier contact pilote concerne directement la demande de roulage, pas le démarrage moteur.
 
 ATIS — DOUBLE FORMAT (uniquement quand le message contient une ATIS) :
 Quand atc_unit est lié à une diffusion ATIS, ajoute le champ "metar_display" en plus de atc_message.
@@ -154,8 +203,7 @@ Quand le pilote a transmis, feedback :
   "scenario_complete": false
 }
 Pour l'initialisation, feedback = null obligatoirement.`
-
-// ─── UTILS ────────────────────────────────────────────────────────────────────
+}
 
 const parseResponse = (text) => {
   try { return JSON.parse(text.replace(/```json\n?|```\n?/g, '').trim()) }
@@ -240,12 +288,16 @@ function ApiKeyScreen({ onSave }) {
 
 // ─── ÉCRAN HOME ───────────────────────────────────────────────────────────────
 
-function HomeScreen({ onStart, onResetKey }) {
+function HomeScreen({ onStart, onResetKey, apiKey }) {
   const [showOACI, setShowOACI]   = useState(false)
   const [regInput, setRegInput]   = useState('')
   const [suggested, setSuggested] = useState(() => randomReg())
   const [acType, setAcType]       = useState('Robin DR400')
   const [confirmed, setConfirmed] = useState(true) // valide par défaut avec suggestion
+  const airports = getAllAirports()
+  const airportList = Object.values(airports)
+  const [depAirport, setDepAirport]   = useState('LFMA')
+  const [destAirport, setDestAirport] = useState('LFMA')
 
   const formatReg = (raw) => { const l = raw.replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,5); return l.length <= 1 ? l : l[0] + '-' + l.slice(1) }
   const rawReg       = regInput
@@ -255,7 +307,7 @@ function HomeScreen({ onStart, onResetKey }) {
   const borderColor  = validManual ? '#1d4ed8' : isBadFormat ? '#7f1d1d' : '#1a2e4a'
   const effectiveType = acType.trim() || 'Robin DR400'
 
-  const handleStart = (scenario) => onStart(scenario, makeAircraft(effectiveReg, effectiveType))
+  const handleStart = (scenario) => onStart(scenario, makeAircraft(effectiveReg, effectiveType), depAirport, scenario.id === 'navigation' ? destAirport : null)
 
   return (
     <div style={{ background: '#060d18', minHeight: '100vh', color: '#f0efe8', fontFamily: "'Inter',-apple-system,sans-serif", padding: '28px 16px' }}>
@@ -310,6 +362,29 @@ function HomeScreen({ onStart, onResetKey }) {
           </button>
         </div>
 
+        {/* Aérodrome(s) */}
+        {airportList.length > 1 && (
+          <div style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '14px 18px', marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 8 }}>AÉRODROME DE DÉPART</div>
+            <select
+              value={depAirport}
+              onChange={e => setDepAirport(e.target.value)}
+              style={{ width: '100%', background: '#060d18', border: '1px solid #1a2e4a', borderRadius: 8, color: '#f0efe8', padding: '9px 13px', fontSize: 14, outline: 'none', fontFamily: "'Courier New',monospace", marginBottom: 12 }}
+            >
+              {airportList.map(a => <option key={a.icao} value={a.icao}>{a.icao} — {a.name}</option>)}
+            </select>
+
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 8 }}>AÉRODROME D'ARRIVÉE (scénario Navigation uniquement)</div>
+            <select
+              value={destAirport}
+              onChange={e => setDestAirport(e.target.value)}
+              style={{ width: '100%', background: '#060d18', border: '1px solid #1a2e4a', borderRadius: 8, color: '#f0efe8', padding: '9px 13px', fontSize: 14, outline: 'none', fontFamily: "'Courier New',monospace" }}
+            >
+              {airportList.map(a => <option key={a.icao} value={a.icao}>{a.icao} — {a.name}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Scénarios */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {SCENARIOS.map(s => (
@@ -352,7 +427,7 @@ function HomeScreen({ onStart, onResetKey }) {
 
 // ─── ÉCRAN TRAINING ───────────────────────────────────────────────────────────
 
-function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
+function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, destinationCode, onBack }) {
   const [messagesState, setMessagesState] = useState([])
   const [loading, setLoading]             = useState(false)
   const [feedback, setFeedback]           = useState(null)
@@ -383,7 +458,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
   }
   const setLiveTranscript = (v) => { liveTranscriptRef.current = v; setLiveTranscriptUI(v) }
 
-  const sysPrompt = buildPrompt(scenario, aircraft)
+  const sysPrompt = buildPrompt(scenario, aircraft, airportCode || 'LFMA', destinationCode)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messagesState, feedback])
 
@@ -801,16 +876,19 @@ function App() {
 
   if (!session) return (
     <HomeScreen
-      onStart={(s, a) => setSession({ scenario: s, aircraft: a })}
+      onStart={(s, a, dep, dest) => setSession({ scenario: s, aircraft: a, airportCode: dep, destinationCode: dest })}
+      apiKey={apiKey}
       onResetKey={() => { setApiKey('') }}
     />
   )
 
   return (
     <TrainingScreen
-      key={session.scenario.id + session.aircraft.callsign}
+      key={session.scenario.id + session.aircraft.callsign + session.airportCode}
       scenario={session.scenario}
       aircraft={session.aircraft}
+      airportCode={session.airportCode}
+      destinationCode={session.destinationCode}
       apiKey={apiKey}
       openAiKey={openAiKey}
       onBack={() => setSession(null)}
