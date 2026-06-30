@@ -266,7 +266,7 @@ function HomeScreen({ onStart, onResetKey }) {
         {/* Scénarios */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {SCENARIOS.map(s => (
-            <button key={s.id} onClick={() => onStart(s, makeAircraft(effectiveReg))}
+            <button key={s.id} onClick={() => handleStart(s)}
               style={{ background: '#0d1829', border: '1px solid #1a2e4a', borderRadius: 14, padding: '16px 18px', textAlign: 'left', cursor: 'pointer', color: '#f0efe8', display: 'flex', alignItems: 'center', gap: 14 }}
               onMouseEnter={e => { e.currentTarget.style.background = '#111f35'; e.currentTarget.style.borderColor = '#1d4ed860' }}
               onMouseLeave={e => { e.currentTarget.style.background = '#0d1829'; e.currentTarget.style.borderColor = '#1a2e4a' }}>
@@ -410,7 +410,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, onBack }) {
       fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + openAiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'tts-1', input: text, voice: 'onyx', response_format: 'mp3', speed: 1.05 }),
+        body: JSON.stringify({ model: 'tts-1-hd', input: text, voice: 'onyx', response_format: 'mp3', speed: 1.0 }),
       })
       .then(function(res) { if (!res.ok) throw new Error('TTS ' + res.status); return res.arrayBuffer() })
       .then(function(buf) { return getAudioCtx().decodeAudioData(buf) })
