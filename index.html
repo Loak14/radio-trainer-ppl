@@ -76,12 +76,18 @@ const AIRPORTS = {
 - Points de report : AN (Travers Eguilles W), AT (Carrefour Eguilles E), AE (Cheminée Gardanne N), AR (Bretelle A8 Aix W — panne radio), AS (Ouest Cabriès — CLR ATC), AW (Aqueduc Roquefavour — CLR ATC)
 - Parkings : Aire NOVEMBRE-ECHO (N1-N6), Aire SIERRA-ECHO (S1-S12), SIERRA herbe
 - NDB ALM 413 kHz, VDF sur terrain
-- Voies de circulation : TWY A, B, C, D (entre parking et piste)
-- Points d'attente intermédiaires : P2 et P3 (situés entre les TWY, avant pénétration zone de trafic)
-- Depuis le parking SIERRA-ECHO (zone Sud, aéroclubs) : le point d'attente est P2 ou P3 selon la TWY empruntée
-- Depuis le parking NOVEMBRE-ECHO (zone Nord) : roulage similaire via TWY vers point d'attente P2/P3 selon piste active
-- Dégagement piste après atterrissage : par le 2ème TWY sauf instruction contraire
-- Aire d'essai moteur avec mur anti-bruit (30x27m) disponible côté Sol`,
+
+GÉOMÉTRIE DES MOUVEMENTS AU SOL LFMA (carte GMC/APDC de la VAC — à respecter strictement) :
+- Le seuil de piste 32 est au SUD du terrain, le seuil de piste 14 est au NORD.
+- TWY A et D : au SUD, desservent le seuil 32. TWY B et C : au NORD, desservent le seuil 14.
+- Les parkings aviation légère sont tous côté EST de la piste : aire SIERRA-ECHO (S1-S12, aéroclubs) et SIERRA herbe au sud, aire NOVEMBRE-ECHO (N1-N6) et NOVEMBRE herbe au nord.
+- P2 : point d'attente intermédiaire à la sortie de l'aire SIERRA-ECHO (sud). P3 : point d'attente intermédiaire au niveau de l'aire NOVEMBRE-ECHO (nord).
+- CLAIRANCE DE ROULAGE OBLIGATOIRE À LFMA : depuis un parking, la clairance désigne TOUJOURS explicitement le point d'attente intermédiaire P2 ou P3, jamais un "point d'attente piste XX" générique en première clairance.
+  · Départ piste 32 depuis SIERRA-ECHO : "roulez Papa 2" puis, après P2 : "roulez via Alpha, point d'attente piste trois-deux" (ou clairance combinée "roulez point d'attente piste trois-deux via Papa 2 et Alpha").
+  · Départ piste 14 depuis SIERRA-ECHO : passage par P2 puis remontée via TWY vers le nord, point d'attente piste 14.
+  · Départ depuis NOVEMBRE-ECHO : P3 puis TWY B ou C pour piste 14 (nord), ou descente vers A/D pour piste 32.
+- Dégagement piste après atterrissage : par le 2ème TWY sauf instruction contraire.
+- Aire d'essai moteur avec mur anti-bruit (30x27m) côté SIERRA-WHISKY (ouest), sur clairance Sol.`,
   },
 }
 
