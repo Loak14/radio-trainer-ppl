@@ -509,6 +509,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
   const [currentPhase, setCurrentPhase]   = useState(scenario.airport)
   const [scores, setScores]               = useState([])
   const [complete, setComplete]           = useState(false)
+  const [started, setStarted]             = useState(false) // gate d'interaction utilisateur (règle autoplay navigateurs)
 
   // Voice
   const [isListening, setIsListening]         = useState(false)
@@ -669,8 +670,11 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
     setLoading(false)
   }, [loading, aircraft, speakATC, sysPrompt, apiKey])
 
-  // ── Init scénario ──────────────────────────────────────────────────────────
-  useEffect(() => {
+  // ── Init scénario — déclenché par le clic "Écoute ATIS" (débloque l'audio) ──
+  const startScenario = () => {
+    setStarted(true)
+    // Débloquer l'AudioContext dans le même geste utilisateur (règle autoplay)
+    try { getAudioCtx() } catch {}
     ;(async () => {
       setLoading(true)
       const init = `Lance le scénario "${scenario.name}" à ${scenario.airport}. Donne le contexte (heure UTC, météo, ATIS si applicable) et attends ma première transmission.`
@@ -680,11 +684,11 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
         historyRef.current = [...initHist, { role: 'assistant', content: JSON.stringify(parsed) }]
         setMessages([{ type: 'atc', content: parsed.atc_message, unit: parsed.atc_unit, phase: parsed.current_phase, metar: parsed.metar_display }])
         if (parsed.current_phase) setCurrentPhase(parsed.current_phase)
-          await speakATC(parsed.atc_message)
+        await speakATC(parsed.atc_message)
       } catch (e) { console.error(e) }
       setLoading(false)
     })()
-  }, [])
+  }
 
   // ── PTT : Whisper si clé OpenAI dispo, sinon Web Speech ──────────────────
   const mediaRecorderRef = useRef(null)
@@ -837,7 +841,28 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
 
       {showOACI && <OACIPanel />}
 
+      {/* Écran de démarrage — le clic débloque l'audio du navigateur */}
+      {!started && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, padding: 24 }}>
+          <div style={{ fontSize: 52 }}>{scenario.emoji}</div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{scenario.name}</div>
+            <div style={{ fontSize: 13, color: '#475569' }}>{scenario.airport}</div>
+          </div>
+          <button
+            onClick={startScenario}
+            style={{ background: '#1d4ed8', border: 'none', borderRadius: 12, color: '#fff', padding: '14px 32px', fontSize: 15, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
+          >
+            🔊 Écouter l'ATIS et démarrer
+          </button>
+          <div style={{ fontSize: 11, color: '#334155', textAlign: 'center', maxWidth: 280 }}>
+            L'ATIS sera diffusé vocalement dès le lancement, comme sur la fréquence 136.230.
+          </div>
+        </div>
+      )}
+
       {/* Transcript */}
+      {started && (
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px 4px' }}>
         {messagesState.map((msg, i) => (
           <div key={i} style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', alignItems: msg.type === 'pilot' ? 'flex-end' : 'flex-start' }}>
@@ -866,6 +891,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
         )}
         <div ref={bottomRef} />
       </div>
+      )}
 
       {/* Feedback */}
       {feedback && (
@@ -891,7 +917,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
 
 
       {/* Confirmation transcription avant envoi */}
-      {pendingText !== null && !complete && (
+      {started && pendingText !== null && !complete && (
         <div style={{ background: '#0d1829', borderTop: '1px solid #1a2e4a', padding: '12px 14px', flexShrink: 0 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', letterSpacing: 0.6, marginBottom: 6 }}>VÉRIFIE AVANT D'ÉMETTRE</div>
           <textarea
@@ -914,7 +940,7 @@ function TrainingScreen({ scenario, aircraft, apiKey, openAiKey, airportCode, de
       )}
 
       {/* Zone PTT */}
-      {!complete && pendingText === null && (
+      {started && !complete && pendingText === null && (
         <div style={{ background: '#0d1829', borderTop: '1px solid #1a2e4a', padding: '14px 14px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
           {(isListening || liveTranscript) && (
             <div style={{ width: '100%', background: '#071a0f', border: '1px solid #15803d40', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#86efac', fontFamily: "'Courier New',monospace", minHeight: 36 }}>
